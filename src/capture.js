@@ -18,8 +18,8 @@
     REVOKE_DELAY_MS: 60 * 1000, // Blob URL 해제 지연 (즉시 해제 시 다운로드가 취소되는 브라우저 대응)
     FILENAME_SLUG_MAX: 80,
     TOAST_MS: 12 * 1000,
-    // 값을 비워야 하는 hidden input / meta 이름 패턴
-    REDACT_NAME_RE: /csrf|xsrf|token|nonce|authenticity|session|secret|api[-_]?key/i,
+    // 값을 비워야 하는 입력칸·meta·속성의 "이름" 패턴 (토큰·키·자격 증명)
+    REDACT_NAME_RE: /csrf|xsrf|token|nonce|authenticity|session|secret|api[-_]?key|private[-_]?key|access[-_]?key|credential/i,
   };
 
   // ── 상수 (본 흐름보다 먼저 선언해야 TDZ 오류가 나지 않는다) ──
@@ -42,6 +42,22 @@
     'poster', 'background', 'lowsrc', 'dynsrc', 'cite', 'codebase',
   ]);
   const DROP_ATTRS = new Set(['nonce', 'integrity', 'crossorigin', 'ping', 'action', 'formaction']);
+  // ── 민감 입력칸 판별 (값을 파일에 남기지 않음) ──
+  // HTML 표준 autocomplete 토큰: 비밀번호·OTP·카드 정보
+  const SENSITIVE_AUTOCOMPLETE = new Set([
+    'current-password', 'new-password', 'one-time-code',
+    'cc-number', 'cc-csc', 'cc-exp', 'cc-exp-month', 'cc-exp-year',
+  ]);
+  // name/id 패턴. "비밀번호 보기" 토글로 type 이 text 로 바뀐 칸도 잡기 위해 type 과 무관하게 본다.
+  // 짧은 약어(otp, pin)는 단어 경계를 요구해 footprint·spinner 같은 오탐을 막는다.
+  const SENSITIVE_FIELD_RE =
+    /pass(?:word|wd|code|phrase)|pwd|cvv|cvc|csc|card.?num|card.?no(?![a-z])|cc.?num|security.?code|one.?time|(?:^|[^a-z])(?:otp|pin|pincode)(?:[^a-z]|$)/i;
+  // 속성 값 안의 JWT, JSON 의 토큰 키 ("csrf_token":"…")
+  const JWT_RE = /eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}/g;
+  const JSON_SECRET_RE =
+    /("[\w.-]*(?:csrf|xsrf|token|secret|password|api[-_]?key|session)[\w.-]*"\s*:\s*)"(?:[^"\\]|\\.)*"/gi;
+  // 값 기반 치환에서 제외할 속성 (URL 을 바꾸면 이미지·링크가 깨진다)
+  const VALUE_SCAN_SKIP = new Set(['src', 'srcset', 'href', 'xlink:href', 'poster', 'style', 'srcdoc', 'data']);
   // ── 폰트 내장 ─────────────────────────────────────────────────────
   const fontCache = new Map(); // url → Promise<dataURL|null>
   let fontBytes = 0;
@@ -161,7 +177,12 @@
           syncInput(o, c);
           break;
         case 'textarea':
-          c.textContent = o.value;
+          if (isSensitiveField(o)) {
+            if (o.value) report.redacted++;
+            c.textContent = '';
+          } else {
+            c.textContent = o.value;
+          }
           break;
         case 'option':
           c.toggleAttribute('selected', o.selected);
@@ -221,11 +242,6 @@
   function syncInput(o, c) {
     const type = (o.type || '').toLowerCase();
     switch (type) {
-      case 'password':
-        // 비밀번호는 입력값·속성값 모두 파일에 남기지 않는다
-        if (o.value || c.hasAttribute('value')) report.redacted++;
-        c.removeAttribute('value');
-        return;
       case 'file':
       case 'submit':
       case 'reset':
@@ -236,15 +252,22 @@
       case 'radio':
         c.toggleAttribute('checked', o.checked);
         return;
-      case 'hidden':
-        if (CONFIG.REDACT_NAME_RE.test(o.name || o.id || '') && o.value) {
-          c.setAttribute('value', '');
-          report.redacted++;
-        }
-        return;
-      default:
-        c.setAttribute('value', o.value);
     }
+    // 비밀번호·OTP·카드 정보·토큰: 입력값도, 서버가 넣어 둔 value 속성도 남기지 않는다
+    if (type === 'password' || isSensitiveField(o)) {
+      if (o.value || c.hasAttribute('value')) report.redacted++;
+      c.removeAttribute('value');
+      return;
+    }
+    c.setAttribute('value', o.value);
+  }
+
+  /** 값이 파일에 남으면 안 되는 입력칸인지 (autocomplete 토큰 → name/id 패턴 순) */
+  function isSensitiveField(el) {
+    const tokens = (el.getAttribute('autocomplete') || '').toLowerCase().split(/\s+/);
+    if (tokens.some((t) => SENSITIVE_AUTOCOMPLETE.has(t))) return true;
+    const key = (el.getAttribute('name') || '') + ' ' + (el.getAttribute('id') || '');
+    return SENSITIVE_FIELD_RE.test(key) || CONFIG.REDACT_NAME_RE.test(key);
   }
 
   function frameLabel(o) {
@@ -334,9 +357,19 @@
           report.unsafeUrls++;
           if (name === 'href') el.setAttribute(el.attributes[k].name, '#');
           else el.removeAttribute(el.attributes[k].name);
+        } else {
+          redactAttribute(el, el.attributes[k].name, name, value);
         }
       }
       if (el.localName === 'meta') redactMeta(el);
+      // 1단계 짝 맞춤을 거치지 않는 <template> 안 입력칸까지 포함해 한 번 더 확인 (중복 적용돼도 결과 동일)
+      if (el.localName === 'input' || el.localName === 'textarea') {
+        const t = (el.getAttribute('type') || '').toLowerCase();
+        if ((t === 'password' || isSensitiveField(el)) && (el.hasAttribute('value') || el.textContent)) {
+          el.removeAttribute('value');
+          if (el.localName === 'textarea') el.textContent = '';
+        }
+      }
       // 1단계에서 짝이 없던 iframe(<template> 안 등)도 동일하게 무력화
       if ((el.localName === 'iframe' || el.localName === 'frame') && !el.hasAttribute('data-ds-placeholder')) {
         neutralizeFrame(el, el.localName, null);
@@ -351,6 +384,32 @@
     }
   }
 
+  /**
+   * 속성 단위 민감값 제거
+   *  - 이름: data-csrf-token, data-api-key, <gmp-map api-key> 처럼 이름에 토큰·키가 들어간 속성 → 값 비움
+   *  - 값: JWT, JSON 속의 "csrf_token":"…" (Inertia data-page, React props 등) → 해당 부분만 비움
+   * name·value·type 등 이름 자체가 구조적인 속성과 우리가 붙인 data-ds-* 는 건드리지 않는다.
+   */
+  function redactAttribute(el, rawName, name, value) {
+    if (!value || name.startsWith('data-ds-')) return;
+    // data-*, 하이픈 속성(api-key), 커스텀 엘리먼트의 속성(<my-widget token>)은 이름으로 판별
+    if (name.startsWith('data-') || name.includes('-') || el.localName.includes('-')) {
+      if (CONFIG.REDACT_NAME_RE.test(name)) {
+        el.setAttribute(rawName, '');
+        report.redacted++;
+        return;
+      }
+    }
+    if (VALUE_SCAN_SKIP.has(name) || value.length < 20) return;
+    let next = value;
+    if (next.includes('eyJ')) next = next.replace(JWT_RE, '');
+    if (next.includes('{')) next = next.replace(JSON_SECRET_RE, '$1""');
+    if (next !== value) {
+      el.setAttribute(rawName, next);
+      report.redacted++;
+    }
+  }
+
   function redactMeta(el) {
     const name = el.getAttribute('name') || el.getAttribute('property') || '';
     if (CONFIG.REDACT_NAME_RE.test(name) && el.getAttribute('content')) {
@@ -362,7 +421,7 @@
   function isUnsafeUrl(value) {
     // 브라우저는 스킴 앞뒤의 공백·제어문자를 무시하므로 동일하게 정규화 후 판정
     // eslint-disable-next-line no-control-regex
-    const v = String(value).replace(/[\u0000- \u007f-\u009f]/g, '').toLowerCase();
+    const v = String(value).replace(/[\u0000-\u0020\u007f-\u009f]/g, '').toLowerCase();
     return (
       v.startsWith('javascript:') ||
       v.startsWith('vbscript:') ||

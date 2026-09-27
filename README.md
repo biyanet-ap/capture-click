@@ -3,7 +3,7 @@
 현재 보고 있는 웹페이지를 **스크립트 없는 정지 화면 HTML 파일 하나**로 저장하는 북마클릿입니다.
 저장한 파일은 스튜디오의 [내 PC 에서 html 파일 불러오기]로 엽니다.
 
-v1(원본 북마클릿)을 분석하면서 찾은 결함 10개와 재구축 중 추가로 발견한 결함 8개를 반영해 다시 작성했습니다.
+v1(원본 북마클릿)을 분석하면서 찾은 결함 10개와 재구축 중 추가로 발견한 결함 8개를 반영해 다시 작성했습니다. 전체 회귀 테스트 37개 항목을 통과합니다.
 
 ---
 
@@ -84,13 +84,28 @@ design-studio-capture/
 | # | v1 문제 | 영향 | v2 해결 방법 |
 |---|---|---|---|
 | A | 문자 인코딩 선언을 그대로 둔 채 UTF-8 로 저장 | **Shift_JIS·EUC-KR 페이지가 전부 깨짐** (일본 사이트에 치명적) | 기존 charset 선언 제거, `<meta charset="utf-8">` 을 문서 맨 앞에 삽입 |
-| B | `crossorigin` 만 지우고 `integrity` 는 남김 | SRI 가 걸린 CDN CSS(Bootstrap 공식 CDN 스니펫 등)가 캡처 파일에서 차단 | 인라인하므로 해당 없음. 남는 `<link>` 도 `integrity` 함께 제거 |
+| B | `crossorigin` 만 지우고 `integrity` 는 남김 | SRI 가 걸린 CDN CSS(Bootstrap 공식 CDN 스니펫 등)의 `<link>` 가 캡처 파일에서 **SRI 검증 실패로 차단**(콘솔 오류). v1 에서는 같은 규칙을 한 번 더 인라인해 둔 탓(#2 중복)에 화면에선 가려졌지만, 중복을 없애는 순간 스타일이 통째로 빠지는 문제 | 인라인하므로 해당 없음. 남는 요소의 `integrity`·`crossorigin` 도 함께 제거 |
 | C | `<!DOCTYPE html>` 을 강제로 붙임 | doctype 없는 레거시 페이지가 quirks → 표준 모드로 바뀌어 레이아웃 변경 | 원본 doctype 그대로 재현 (없으면 없음) |
 | D | 다운로드 링크를 `document.body` 에 붙여 클릭 | 문서 단위 클릭 위임(SPA 라우터, pjax 등)이 `preventDefault` 하면 **다운로드 자체가 안 됨** | 토스트의 closed Shadow DOM 안에서 클릭 → 바깥 리스너는 `<a>` 를 볼 수 없음 |
-| E | iframe 을 그대로 둠 | 캡처 파일을 열면 **iframe 안의 원격 스크립트가 실행됨** (테스트에서 확인) | `sandbox` + `srcdoc` 자리표시로 교체 |
-| F | form `action` 유지 | 캡처 파일에서 제출 버튼을 누르면 실제 서버로 전송 | `action`·`formaction` 제거 |
-| G | 비밀번호 `value`, CSRF 토큰(meta, hidden input)이 파일에 그대로 남음 | 캡처 파일을 공유하면 유출 경로 | 비밀번호 값 제거, 이름에 csrf/token/session 등이 들어간 meta·hidden input 값 비움 |
+| E | iframe 을 그대로 둠 | 캡처 파일을 열면 **iframe 안의 원격 스크립트가 실행됨** (테스트에서 확인) | `sandbox` + `srcdoc` 자리표시로 교체 (`<template>` 안의 iframe 포함) |
+| F | form `action` 유지 | 캡처 파일에서 제출 버튼을 누르면 실제 서버로 전송 | form `action`, 버튼 `formaction` 모두 제거 |
+| G | 비밀번호 `value`, CSRF 토큰(meta, hidden input), data-* 속성의 토큰이 파일에 그대로 남음 | 캡처 파일을 공유하면 유출 경로 | 아래 4-2-1 참고 |
 | H | 커스텀 엘리먼트가 스크립트 없이 `:defined` 가 되지 않음 | `x-foo:not(:defined){visibility:hidden}` (웹 컴포넌트 라이브러리 권장 패턴)에 걸려 **컴포넌트가 사라짐** | CSS 의 `:not(:defined)` / `:defined` 치환 |
+
+#### 4-2-1. G(민감값) 처리 기준
+
+v2 첫 버전은 4-1 #6(입력값 보존)을 넣으면서 **"비밀번호 보기"로 드러난 비밀번호·카드번호·CVC·OTP 를 새로 파일에 남기는 퇴행**이 있었습니다(v1 은 입력값 자체를 복사하지 않아 해당 없음). 재검증에서 발견해 아래 기준으로 수정했습니다.
+
+| 대상 | 판별 기준 | 처리 |
+|---|---|---|
+| 입력칸(`input`, `textarea`) | `type="password"` | 입력값·`value` 속성 모두 남기지 않음 |
+| | `autocomplete` 토큰: `current-password`, `new-password`, `one-time-code`, `cc-number`, `cc-csc`, `cc-exp*` | 〃 ("비밀번호 보기"로 type 이 text 로 바뀐 칸도 여기서 걸림) |
+| | name/id 패턴: password·passwd·pwd·cvv·cvc·card number·security code·one-time, 단어 경계가 있는 otp·pin, 그리고 `REDACT_NAME_RE` | 〃 |
+| `meta` | name/property 가 `REDACT_NAME_RE` 에 해당 (`csrf-token`, `_csrf` 등) | `content` 비움 |
+| 속성 이름 | data-*, 하이픈 속성(`api-key`), 커스텀 엘리먼트 속성 중 이름이 `REDACT_NAME_RE` 에 해당 | 값 비움 |
+| 속성 값 | JWT(`eyJ….….…`), JSON 안의 `"…token…":"…"` 류 키 (Inertia `data-page`, React props 등) | 해당 부분만 비움 (JSON 구조는 유지) |
+
+과잉 제거 방지: `card_note`, `spinner`, `footprint` 같은 이름은 걸리지 않도록 테스트로 고정했습니다(28번 항목).
 
 ### 4-3. 그 밖의 개선
 
@@ -120,7 +135,7 @@ design-studio-capture/
 | 5 | 교차 출처 CDN CSS | FAIL | PASS |
 | 6 | CDN CSS 안의 @import | FAIL | PASS |
 | 7 | CORS 불가 CDN (온라인) | FAIL | PASS |
-| 8 | integrity(SRI) 걸린 CDN CSS | PASS | PASS |
+| 8 | integrity(SRI) 걸린 CDN CSS 화면 적용 | PASS | PASS |
 | 9 | CSS-in-JS(insertRule) 스타일 | PASS | PASS |
 | 10 | document.adoptedStyleSheets | FAIL | PASS |
 | 11 | Shadow DOM 내용·스타일 | FAIL | PASS |
@@ -135,24 +150,33 @@ design-studio-capture/
 | 20 | iframe 무력화 (sandbox, src 없음) | FAIL | PASS |
 | 21 | form action 제거 | FAIL | PASS |
 | 22 | meta refresh 제거 | PASS | PASS |
-| 23 | 동일 CSS 중복 적용 없음 | FAIL | PASS |
-| 24 | 안내 UI 가 캡처에 섞이지 않음 | PASS | PASS |
-| 25 | 화면에 안 쓰인 폰트는 내장 안 함 | FAIL | PASS |
-| 26 | [오프라인] 폰트 내장 | FAIL | PASS |
-| 27 | [오프라인] CDN CSS 내장 | FAIL | PASS |
-| 28 | doctype 없는 quirks 모드 유지 | FAIL | PASS |
-| 29 | 원본 `<base>` 기준 상대경로 | FAIL | PASS |
-| 30 | CSP meta 가 있어도 스타일 적용 | FAIL | PASS |
-| 31 | 클릭 가로채는 SPA 에서도 다운로드 | FAIL | PASS |
+| 23 | [B] integrity 속성·SRI 차단 오류 0건 | FAIL | PASS |
+| 24 | [E] template 안 iframe 도 무력화 | FAIL | PASS |
+| 25 | [F] 버튼 formaction 제거 | FAIL | PASS |
+| 26 | [G] 비밀번호 보기·카드번호·CVC·OTP 값 없음 | PASS | PASS |
+| 27 | [G] data-* 속성·JSON·JWT 토큰 없음 | FAIL | PASS |
+| 28 | [G] 일반 입력값·JSON 은 보존 (과잉 제거 없음) | FAIL | PASS |
+| 29 | 동일 CSS 중복 적용 없음 | FAIL | PASS |
+| 30 | 안내 UI 가 캡처에 섞이지 않음 | PASS | PASS |
+| 31 | 화면에 안 쓰인 폰트는 내장 안 함 | FAIL | PASS |
+| 32 | [오프라인] 폰트 내장 | FAIL | PASS |
+| 33 | [오프라인] CDN CSS 내장 | FAIL | PASS |
+| 34 | doctype 없는 quirks 모드 유지 | FAIL | PASS |
+| 35 | 원본 `<base>` 기준 상대경로 | FAIL | PASS |
+| 36 | CSP meta 가 있어도 스타일 적용 | FAIL | PASS |
+| 37 | 클릭 가로채는 SPA 에서도 다운로드 | FAIL | PASS |
 
 | 지표 | v1 | v2 |
 |---|---|---|
-| 통과 | 6 / 31 | **31 / 31** |
-| 원본 화면 대비 픽셀 차이 | 19.53% | **0.98%** |
-| 캡처 파일 크기 (픽스처) | 4KB | 472KB (폰트 357KB 내장 포함) |
+| 통과 | 7 / 37 | **37 / 37** |
+| 원본 화면 대비 픽셀 차이 | 20.16% | **1.06%** |
+| 캡처 파일 크기 (테스트 페이지) | 5KB | 473KB (폰트 357KB 내장 포함) |
 
-v2 의 픽셀 차이 0.98% 는 의도된 자리표시(iframe, object), closed Shadow DOM, 오염된 canvas 영역입니다.
-v1 에서 4번이 PASS 인 이유는 `<link>` 를 지우지 않아 온라인일 때 원본 CSS 가 다시 로드되기 때문입니다(중복 적용, 23번 FAIL).
+v2 의 픽셀 차이 1.06% 는 의도된 자리표시(iframe, object), closed Shadow DOM, 오염된 canvas 영역입니다.
+v1 에서 4·8번이 PASS 인 이유는 규칙을 중복 적용하기 때문입니다(29번 FAIL). 4번은 남겨 둔 `<link>` 가 온라인에서 다시 로드되고, 8번은 차단된 SRI `<link>` 대신 중복 인라인 사본이 적용됩니다(23번 FAIL).
+v1 에서 26번이 PASS 인 이유는 입력값을 아예 복사하지 않기 때문입니다(14번 FAIL).
+
+자동 테스트 외에 다음을 별도 스크립트로 확인했습니다: CDN CSS 실패 목록 보고, 2단 중첩 Shadow DOM 복원, 오염된 canvas 가 오류 없이 개수만 보고되는지, Blob URL 이 다운로드 직후·59초 뒤에는 유지되고 61초 뒤 해제되는지.
 
 ---
 
@@ -167,6 +191,9 @@ v1 에서 4번이 PASS 인 이유는 `<link>` 를 지우지 않아 온라인일 
 | 이미지 | 용량 문제로 내장하지 않음 (절대 URL) | 오프라인·로그인 필요 이미지는 표시 안 됨 |
 | 페이지 CSP 의 `connect-src` | 북마클릿의 fetch 도 페이지 CSP 를 따름 | 해당 CDN CSS 는 `<link>` 로 남음 |
 | 스크롤 위치, `:hover` 상태, `<dialog>` 모달(top layer), WebGL(preserveDrawingBuffer=false) | DOM 에 상태가 남지 않음 | 미지원 |
+| 민감값 판별 | 이름·autocomplete·값 **패턴 기반**. 규칙에 없는 이름의 비밀 값, 화면에 글자로 보이는 토큰, URL 안의 서명값(presigned URL 등)은 남음 | 공유 전 확인. 패턴은 `CONFIG.REDACT_NAME_RE` 등으로 조정 |
+| 민감값 과잉 제거 | JSON 키에 token 이 들어간 일반 값(`tokenCount` 등)도 비워짐 | 정지 화면 용도라 동작 영향 없음 |
+| `:defined` 치환 | 내장하지 못한 CDN CSS(CORS 불가)는 치환 불가 | 해당 CSS 가 웹 컴포넌트를 숨기면 온라인에서도 숨겨짐 |
 | 브라우저 | Chromium 141 에서 자동 검증. Firefox·Safari 는 미검증 | 사용 전 한 번 수동 확인 권장 |
 
 ## 7. 스튜디오(로더) 쪽 참고사항
@@ -181,7 +208,8 @@ v1 에서 4번이 PASS 인 이유는 `<link>` 를 지우지 않아 온라인일 
 
 - 북마클릿이 보내는 네트워크 요청은 **페이지가 이미 참조하는 CSS·폰트에 대한 GET 뿐**이며, 교차 출처에는 쿠키를 보내지 않습니다(`credentials: 'omit'`). 외부로 데이터를 보내는 코드는 없습니다.
 - 캡처 파일은 스크립트·이벤트 핸들러·위험 URL·iframe 원격 콘텐츠·폼 전송 대상이 모두 제거된 상태입니다.
-- 민감값 제거는 **이름 패턴 기반**(`CONFIG.REDACT_NAME_RE`)입니다. 화면에 보이는 개인정보(고객명, 주소 등)는 그대로 캡처되므로 관리자 화면·고객 정보 화면의 캡처 파일은 공유에 주의하세요.
+- 비밀번호·OTP·카드 정보 입력값, CSRF·API 토큰(meta, hidden input, data-* 속성, JSON, JWT)은 파일에 남기지 않습니다. 판별 기준은 4-2-1 을 보세요.
+- 민감값 제거는 **패턴 기반**입니다. 화면에 보이는 개인정보(고객명, 주소 등)는 그대로 캡처되므로 관리자 화면·고객 정보 화면의 캡처 파일은 공유에 주의하세요.
 
 ## 9. 설정값 (`src/capture.js` 상단 `CONFIG`)
 
@@ -192,6 +220,6 @@ v1 에서 4번이 PASS 인 이유는 `<link>` 를 지우지 않아 온라인일 
 | `INLINE_FONTS` | true | 폰트 data: URL 내장 여부 |
 | `FONT_MAX_BYTES` / `FONT_TOTAL_MAX_BYTES` | 2MB / 8MB | 폰트 내장 한도 |
 | `REVOKE_DELAY_MS` | 60000 | Blob URL 해제 지연 |
-| `REDACT_NAME_RE` | csrf, xsrf, token, nonce, authenticity, session, secret, api-key | 값을 비울 hidden input·meta 이름 패턴 |
+| `REDACT_NAME_RE` | csrf, xsrf, token, nonce, authenticity, session, secret, api-key, private-key, access-key, credential | 값을 비울 입력칸·meta·속성의 이름 패턴 |
 
 변경 후 `npm run build` 로 `dist/` 를 다시 만드세요.

