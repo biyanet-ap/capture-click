@@ -1,0 +1,16 @@
+@import "parts/extra.css";
+@font-face {
+  font-family: "Brand";
+  src: url("../fonts/brand.woff2") format("woff2-missing-test"), url("../fonts/brand.ttf") format("truetype");
+  font-display: block;
+}
+@font-face { font-family: "Unused"; src: url("../fonts/brand.ttf?unused") format("truetype"); }
+body { margin: 0; font: 16px/1.5 sans-serif; background: #fff; color: #222; }
+.wrap { padding: 16px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; width: 900px; }
+.title { font-family: "Brand", monospace; font-size: 30px; color: rgb(180, 30, 60); grid-column: 1 / -1; margin: 0; }
+.hero { height: 80px; background: url("../img/bg.png") repeat; grid-column: 1 / -1; }
+.box { height: 60px; padding: 8px; box-sizing: border-box; color: #fff; background: #999; }
+fancy-card:not(:defined) { visibility: hidden; }
+fancy-card { display: block; }
+.embed-frame { width: 280px; height: 60px; border: 0; }
+form { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }

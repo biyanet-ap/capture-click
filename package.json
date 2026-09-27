@@ -1,0 +1,20 @@
+{
+  "name": "design-studio-capture",
+  "version": "2.0.0",
+  "private": true,
+  "description": "현재 웹페이지를 스크립트 없는 단일 HTML 로 저장하는 Design Studio 캡처 북마클릿",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node test/run-tests.mjs"
+  },
+  "devDependencies": {
+    "pixelmatch": "^7.1.0",
+    "playwright": "1.56.0",
+    "pngjs": "^7.0.0",
+    "terser": "^5.44.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

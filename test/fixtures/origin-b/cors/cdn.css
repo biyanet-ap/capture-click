@@ -1,0 +1,4 @@
+/* CDN CSS (ACAO:*), 페이지에서는 crossorigin 없이 로드 → cssRules 읽기 불가 → fetch 경로 */
+@import url("cdn-sub.css");
+.cdn-box { background: rgb(0, 128, 128); }
+.cdn-bg { background: url(img/dot.png); }
